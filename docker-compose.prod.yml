@@ -1,0 +1,102 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: commercial_verified_web_prod
+    command: bash -c "python manage.py makemigrations && python manage.py migrate && python manage.py runserver 0.0.0.0:8003"
+    volumes:
+      - .:/app
+    ports:
+      - "8003:8003"
+    env_file:
+      - env/.env.prod
+    depends_on:
+      - db
+      - redis-master
+    restart: always
+    networks:
+      - commercial_verified_network
+
+  db:
+    image: postgres:15
+    container_name: commercial_verified_db_prod
+    environment:
+      POSTGRES_DB: ${POSTGRES_NAME:-commercial_verified_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"  # Changed from 5432 to 5433 to avoid conflict
+    restart: always
+    networks:
+      - commercial_verified_network
+
+  redis-master:
+    image: redis:7
+    container_name: commercial_verified_redis_master_prod
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_master_data_prod:/data
+    restart: always
+    networks:
+      - commercial_verified_network
+
+  redis-slave:
+    image: redis:7
+    container_name: commercial_verified_redis_slave_prod
+    command: ["redis-server", "--replicaof", "redis-master", "6379"]
+    ports:
+      - "6380:6379"
+    depends_on:
+      - redis-master
+    restart: always
+    networks:
+      - commercial_verified_network
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: commercial_verified_celery_prod
+    command: ["celery", "-A", "commercial_verified", "worker", "--loglevel=info"]
+    volumes:
+      - .:/app
+    env_file:
+      - env/.env.prod
+    depends_on:
+      - redis-master
+      - web
+      - db
+    restart: always
+    networks:
+      - commercial_verified_network
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: commercial_verified_celery_beat_prod
+    command: ["celery", "-A", "commercial_verified", "beat", "--loglevel=info"]
+    volumes:
+      - .:/app
+    env_file:
+      - env/.env.prod
+    depends_on:
+      - redis-master
+      - web
+      - db
+    restart: always
+    networks:
+      - commercial_verified_network
+
+volumes:
+  postgres_data_prod:
+  redis_master_data_prod:
+
+networks:
+  commercial_verified_network:
+    driver: bridge

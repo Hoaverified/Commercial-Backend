@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 from pathlib import Path
 from decouple import AutoConfig
 from datetime import timedelta
+from decimal import Decimal
+from celery.schedules import crontab
 import os
 
 # ============================================================================
@@ -31,27 +33,16 @@ config = AutoConfig(search_path=str(BASE_DIR))
 # ============================================================================
 
 # SECURITY WARNING: keep the secret key used in production secret!
-# In production, set this via environment variable
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-this-in-production')
+SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# Set DEBUG=False in production via environment variable
-DEBUG = config('DEBUG', default=True, cast=bool)
+DEBUG = config('DEBUG', default=False, cast=bool)
 
-# Host/domain names that this Django site can serve
-# In production, specify exact hosts. For development, '*' allows all hosts
-if DEBUG:
-    ALLOWED_HOSTS = ['*']
-else:
-    ALLOWED_HOSTS = config(
-        'ALLOWED_HOSTS',
-        default='localhost,127.0.0.1',
-        cast=lambda v: [s.strip() for s in v.split(',')]
-    )
+ALLOWED_HOSTS = ['*']
 
-CSRF_TRUSTED_ORIGINS = []
-if config('BACKEND_URL', default=''):
-    CSRF_TRUSTED_ORIGINS.append(config('BACKEND_URL'))
+CSRF_TRUSTED_ORIGINS = [
+    config('BACKEND_URL'),
+]
 
 
 # ============================================================================
@@ -59,22 +50,22 @@ if config('BACKEND_URL', default=''):
 # ============================================================================
 
 INSTALLED_APPS = [
-    # Django core apps
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'corsheaders',
     'rest_framework',
-    'rest_framework_simplejwt',  # JWT authentication
-    'corsheaders',  # CORS handling
+
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',  # CORS middleware (should be early)
+    'corsheaders.middleware.CorsMiddleware',
+    # 'community.middleware.VisitorTrackingMiddleware',  # Uncomment when community app is added
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -87,7 +78,7 @@ ROOT_URLCONF = 'commercial_verified.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': ['templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -106,21 +97,52 @@ WSGI_APPLICATION = 'commercial_verified.wsgi.application'
 # ============================================================================
 # DATABASE CONFIGURATION
 # ============================================================================
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('POSTGRES_NAME', default=''),
-        'USER': config('POSTGRES_USER', default=''),
-        'PASSWORD': config('POSTGRES_PASSWORD', default=''),
-        'HOST': config('POSTGRES_HOST', default=''),
-        'PORT': config('POSTGRES_PORT', default=''),
-        'OPTIONS': {
-            'connect_timeout': 10,
-        },
+        'NAME': config('POSTGRES_NAME'),
+        'USER': config('POSTGRES_USER'),
+        'PASSWORD': config('POSTGRES_PASSWORD'),
+        'HOST': config('POSTGRES_HOST'),
+        'PORT': config('POSTGRES_PORT'),
     }
 }
 
 
+# ============================================================================
+# CORS CONFIGURATION
+# ============================================================================
+
+# Helper function to extract base URL (remove path)
+def get_base_url(url):
+    """Extract base URL without path for CORS"""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+CORS_ALLOWED_ORIGINS = []
+
+# Add production URLs (extract base URLs to avoid path issues)
+if config('SITE_URL', default=''):
+    CORS_ALLOWED_ORIGINS.append(get_base_url(config('SITE_URL')))
+
+if config('WWW_SITE_URL', default=''):
+    CORS_ALLOWED_ORIGINS.append(get_base_url(config('WWW_SITE_URL')))
+
+if config('ADMIN_URL', default=''):
+    CORS_ALLOWED_ORIGINS.append(get_base_url(config('ADMIN_URL')))
+
+if config('EMERGENCY_FRONTEND', default=''):
+    CORS_ALLOWED_ORIGINS.append(get_base_url(config('EMERGENCY_FRONTEND')))
+
+# Add local development URLs (optional)
+if config('LOCAL_FRONTEND', default=''):
+    CORS_ALLOWED_ORIGINS.append(get_base_url(config('LOCAL_FRONTEND')))
+ 
+if config('LOCAL_BACKEND', default=''):
+    CORS_ALLOWED_ORIGINS.append(get_base_url(config('LOCAL_BACKEND')))
+    
 # ============================================================================
 # PASSWORD VALIDATION
 # ============================================================================
@@ -142,6 +164,32 @@ AUTH_PASSWORD_VALIDATORS = [
 
 
 # ============================================================================
+# REST FRAMEWORK CONFIGURATION
+# ============================================================================
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    # 'DEFAULT_PERMISSION_CLASSES': (
+    #     'rest_framework.permissions.IsAuthenticated',  # Require authentication by default
+    # ),
+}
+
+
+# ============================================================================
+# JWT AUTHENTICATION CONFIGURATION
+# ============================================================================
+
+# Note: SIMPLE_JWT cannot be removed if using JWT authentication in REST_FRAMEWORK
+# You can simplify it, but it's required for JWT token configuration
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+}
+
+
+# ============================================================================
 # INTERNATIONALIZATION
 # ============================================================================
 
@@ -159,12 +207,7 @@ USE_TZ = True
 # ============================================================================
 
 STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
-
-# Additional locations of static files
-STATICFILES_DIRS = [
-    # BASE_DIR / 'static',
-]
+STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 
 
 # ============================================================================
@@ -182,111 +225,15 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
-# ============================================================================
-# REST FRAMEWORK CONFIGURATION
-# ============================================================================
-
-REST_FRAMEWORK = {
-    # Authentication classes - JWT authentication
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-    ),
-    
-    # Permission classes - uncomment to require authentication by default
-    # 'DEFAULT_PERMISSION_CLASSES': (
-    #     'rest_framework.permissions.IsAuthenticated',
-    # ),
-    
-    # Pagination settings
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20,
-    
-    # Renderer classes
-    'DEFAULT_RENDERER_CLASSES': [
-        'rest_framework.renderers.JSONRenderer',
-    ],
-    
-    # Parser classes
-    'DEFAULT_PARSER_CLASSES': [
-        'rest_framework.parsers.JSONParser',
-        'rest_framework.parsers.FormParser',
-        'rest_framework.parsers.MultiPartParser',
-    ],
-    
-    # Exception handling
-    'EXCEPTION_HANDLER': 'rest_framework.views.exception_handler',
-    
-    # Date/time formatting
-    'DATETIME_FORMAT': '%Y-%m-%d %H:%M:%S',
-    'DATE_FORMAT': '%Y-%m-%d',
-    'TIME_FORMAT': '%H:%M:%S',
-}
-
 
 # ============================================================================
-# JWT AUTHENTICATION CONFIGURATION
+# CUSTOM USER MODEL
 # ============================================================================
 
-SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
-    'ROTATE_REFRESH_TOKENS': False,
-    'BLACKLIST_AFTER_ROTATION': False,
-    'UPDATE_LAST_LOGIN': False,
-    
-    'ALGORITHM': 'HS256',
-    'SIGNING_KEY': SECRET_KEY,
-    'VERIFYING_KEY': None,
-    'AUDIENCE': None,
-    'ISSUER': None,
-    'JWK_URL': None,
-    'LEEWAY': 0,
-    
-    'AUTH_HEADER_TYPES': ('Bearer',),
-    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
-    'USER_ID_FIELD': 'id',
-    'USER_ID_CLAIM': 'user_id',
-    'USER_AUTHENTICATION_RULE': 'rest_framework_simplejwt.authentication.default_user_authentication_rule',
-    
-    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
-    'TOKEN_TYPE_CLAIM': 'token_type',
-    'TOKEN_USER_CLASS': 'rest_framework_simplejwt.models.TokenUser',
-    
-    'JTI_CLAIM': 'jti',
-    
-    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
-    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=5),
-    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
-}
+# AUTH_USER_MODEL = 'authentication.Users'  # Uncomment when authentication app is added
+# Using default Django User model for now
 
 
-# ============================================================================
-# CORS CONFIGURATION
-# ============================================================================
-
-# CORS allowed origins - add your frontend URLs here
-CORS_ALLOWED_ORIGINS = []
-
-# Add production URLs
-if config('SITE_URL', default=''):
-    CORS_ALLOWED_ORIGINS.append(config('SITE_URL'))
-
-if config('WWW_SITE_URL', default=''):
-    CORS_ALLOWED_ORIGINS.append(config('WWW_SITE_URL'))
-
-if config('ADMIN_URL', default=''):
-    CORS_ALLOWED_ORIGINS.append(config('ADMIN_URL'))
-
-# Add local development URLs (optional)
-if config('LOCAL_FRONTEND', default=''):
-    CORS_ALLOWED_ORIGINS.append(config('LOCAL_FRONTEND'))
-
-if config('LOCAL_BACKEND', default=''):
-    CORS_ALLOWED_ORIGINS.append(config('LOCAL_BACKEND'))
-
-# CORS settings
-CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all origins in development
 
 
 # ============================================================================
@@ -307,7 +254,6 @@ if not DEBUG:
     # Content Security
     SECURE_CONTENT_TYPE_NOSNIFF = True
     SECURE_BROWSER_XSS_FILTER = True
-    X_FRAME_OPTIONS = 'DENY'
     
     # Session Security
     SESSION_COOKIE_HTTPONLY = True
